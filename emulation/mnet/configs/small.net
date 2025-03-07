@@ -1,0 +1,39 @@
+[network]
+#Test
+rings=5
+routers=14
+#Actual
+#rings=5
+#routers=14
+ground_stations=yes
+
+[monitor]
+stable_monitors=yes
+
+[physical]
+min_elevation=10
+
+# Ground Stations Name = lat, lon
+[ground_stations]
+G_NYC = 40.713636, -74.025015
+G_CBR = -35.2777038, 149.121961
+G_LON = 51.505408, -0.114591
+G_LAX = 34.034896, -118.243518
+#G_PAO = 37.44651, -122.13861
+#G_SYD = -33.94056, 151.17268
+#G_ZRH = 47.45516, 8.56350
+#G_HND = 35.54852, 139.78079
+#G_ADL = 34.9285, 138.6007
+
+
+# Vessels Name = waypoint list (lat,lon pairs separated by semicolons)
+[vessels]
+V_CARGO1 = 40.713636,-74.025015;-35.2777038,149.121961;51.505408,-0.114591
+V_CARGO2 = 34.034896,-118.243518;-35.2777038,149.121961;51.505408,-0.114591
+
+[constellation]
+# in kilometers
+altitude=1141.3
+# in degrees
+inclination=48.0155
+

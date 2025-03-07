@@ -1,0 +1,51 @@
+<html>
+	<head>
+		<meta http-equiv="refresh" content="10">
+		<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+	  </head>
+  <body>
+	<div class="col-lg-8 mx-auto p-4 py-md-5">
+		<nav aria-label="breadcrumb">
+			<ol class="breadcrumb">
+				<li class="breadcrumb-item"><a href="{{ url_for('root') }}">Home</a></li>
+				<li class="breadcrumb-item active" aria-current="page">Station</li>
+			</ol>
+		</nav>
+		<header class="d-flex align-items-center mb-5 border-bottom">
+			<span class="fs-4"> SatNetMiniSim</span>
+		</header>
+	
+	  <h1>Ground Station {{ station["name"] }}</h1> 
+	  Loopback: {{ station.defaultIP() }}
+	  <h2>Uplinks</h2>
+	  <ul>
+	  {% for link in station.uplinks %}
+	  <li>Uplink: {{ link.sat_name }} {{ link.distance }} km,
+		  {{ link.ip_pool_entry.ip1 }} - {{ link.ip_pool_entry.ip2 }}
+	  {% endfor %}
+	  </ul>
+	  <h2> Connectivity </h2>
+	  <table>
+	      <body>
+	  {% for ring in ring_list %}
+	  	<tr>
+	      {% for node in ring %}
+	      	    {%- set bg="lightgrey" %}
+		    {% if status_list[node] == 1 %}
+	      	    {%- set bg="lightgreen" %}
+		    {% elif status_list[node] == 0 %}
+	      	    {%- set bg="pink" %}
+		    {% endif %}
+		    <td style="background-color:{{bg}};">
+			{{ node }}
+		    </td>
+	      {% endfor %} 
+	  	</tr>
+	  {% endfor %}
+	      </body>
+		</table>
+	</div>
+  </body>
+</html> 
+
+

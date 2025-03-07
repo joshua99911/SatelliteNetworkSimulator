@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SatNetMiniSim</title>
+  <!-- Bootstrap CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <!-- External CSS for custom styling -->
+  <link rel="stylesheet" href="/static/css/style.css" />
+  <!-- Plotly for graphs -->
+  <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+</head>
+<body class="bg-light">
+  <div class="container">
+    <div class="col-lg-8 mx-auto p-4 py-md-5">
+      <nav class="mb-4">
+        <h2 class="fw-bold">Home</h2>
+      </nav>
+
+      <div class="d-flex align-items-center mb-5 border-bottom pb-3">
+        <span class="fs-4 fw-semibold">SatNetMiniSim</span>
+      </div>
+
+      <div class="row">
+        <div class="col">
+          <!-- Network Status Section -->
+          <div class="section-container">
+            <h3 class="mb-4">Network Status</h3>
+            <p><strong>Network:</strong> {{ info["rings"] }} Rings x {{ info["ring_nodes"] }} Nodes</p>
+            <p>
+              <strong>Links:</strong>
+              {{ info["link_stats"]["count"] }} Total,
+              <span class="text-success">{{ info["link_stats"]["up_count"] }} Up</span>,
+              <span class="text-danger">{{ info["link_stats"]["count"] - info["link_stats"]["up_count"] }} Down</span>
+            </p>
+            <p><strong>Sample Time:</strong> {{ info["current_time"] }}</p>
+            <p><strong>Total Run Time:</strong> {{ info["run_time"] }}</p>
+          </div>
+
+          <!-- Satellite Map Component (React) -->
+          <div id="satellite-map" class="satellite-map-container"></div>
+
+          <!-- Connection Status -->
+          <div class="section-container">
+            <h3 class="mb-4">Connection Status</h3>
+            {% if info["monitor_stable_nodes"] %}
+              <h4 class="mb-3">Stable Nodes</h4>
+              <div class="chart-container">
+                <div id="stable-nodes-chart"></div>
+              </div>
+            {% endif %}
+
+            <h4 class="mb-3">Dynamic Nodes</h4>
+            <div class="chart-container">
+              <div id="dynamic-nodes-chart"></div>
+            </div>
+          </div>
+
+          <!-- Events Section -->
+          <div class="section-container">
+            <h3 class="mb-4">Events</h3>
+            <ul class="list-unstyled">
+              {% if info["events"]|length == 0 %}
+                <li><em>None</em></li>
+              {% endif %}
+              {% for entry in info["events"] %}
+                <li class="mb-2">{{ entry[0] }}: {{ entry[1] }}</li>
+              {% endfor %}
+            </ul>
+          </div>
+
+          <!-- Ground Stations Section -->
+          <div class="section-container">
+            <h3 class="section-header d-flex align-items-center collapsed" data-bs-toggle="collapse" data-bs-target="#ground-stations-content">
+              <span class="collapse-icon me-2">▼</span>
+              Ground Stations
+            </h3>
+            <div id="ground-stations-content" class="collapse">
+              <ul class="list-unstyled mt-3">
+                {% for entry in info["stations"] %}
+                  <li class="mb-4">
+                    <div class="d-flex align-items-center mb-2">
+                      <a href="{{ url_for('view_station', name=entry.name) }}" class="router-link me-3">
+                        {{ entry.name }}
+                      </a>
+                      <span class="text-muted">{{ entry.defaultIP() }}</span>
+                    </div>
+                    <div class="mb-2">
+                      {% for stat in info["ping_stats"][entry.name] %}
+                        {% if stat[1] == 1 %}
+                          {%- set bg = "lightgreen" %}
+                        {% elif stat[1] == 0 %}
+                          {%- set bg = "pink" %}
+                        {% endif %}
+                        <span class="status-box" style="background-color: {{ bg }}">
+                          {{ stat[0] }}
+                        </span>
+                      {% endfor %}
+                    </div>
+                    <ul class="list-unstyled ms-3">
+                      {% for link in entry.uplinks %}
+                        <li class="text-muted">Uplink: {{ link.sat_name }} {{ link.distance }} km</li>
+                      {% endfor %}
+                    </ul>
+                  </li>
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+
+          <!-- Routers Section -->
+          <div class="section-container">
+            <h3 class="section-header d-flex align-items-center collapsed" data-bs-toggle="collapse" data-bs-target="#routers-content">
+              <span class="collapse-icon me-2">▼</span>
+              Routers ({{ info["routers"]|length }})
+            </h3>
+            <div id="routers-content" class="collapse">
+              <ul class="list-unstyled mt-3">
+                {% for entry in info["routers"] %}
+                  <li class="mb-3">
+                    <div class="d-flex align-items-center mb-2">
+                      <a href="{{ url_for('view_router', node=entry[0]) }}" class="router-link me-3">
+                        {{ entry[0] }}
+                      </a>
+                      <span class="text-muted">{{ entry[1] }}</span>
+                    </div>
+                    <div>
+                      {% for stat in info["ping_stats"][entry[0]] %}
+                        {% if stat[1] == 1 %}
+                          {%- set bg = "lightgreen" %}
+                        {% elif stat[1] == 0 %}
+                          {%- set bg = "pink" %}
+                        {% endif %}
+                        <span class="status-box" style="background-color: {{ bg }}">
+                          {{ stat[0] }}
+                        </span>
+                      {% endfor %}
+                    </div>
+                  </li>
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+          <!-- Database Monitor Section -->
+          <div class="section-container">
+            <h3 class="section-header d-flex align-items-center collapsed" data-bs-toggle="collapse" data-bs-target="#database-monitor-content">
+              <span class="collapse-icon me-2">▼</span>
+              Database Monitor
+            </h3>
+            <div id="database-monitor-content" class="collapse">
+              <div id="database-monitor"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bootstrap JS Bundle with Popper -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <!-- Production React and ReactDOM -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/17.0.2/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/17.0.2/umd/react-dom.production.min.js"></script>
+  <!-- Load the bundled JS (built by Webpack) -->
+  <script src="/static/js/dist/bundle.js"></script>
+  <!-- Connection Status Charts -->
+  <script>
+    function createConnectionCharts() {
+      {% if info["monitor_stable_nodes"] %}
+      const stableTraceFail = {
+        x: {{ info["stats_dates"]|tojson }},
+        y: {{ info["stats_stable_fail"]|tojson }},
+        name: 'Failed',
+        type: 'scatter',
+        fill: 'tonexty',
+        line: { color: '#ff7f7f' }
+      };
+      const stableTraceOk = {
+        x: {{ info["stats_dates"]|tojson }},
+        y: {{ info["stats_stable_ok"]|tojson }},
+        name: 'Success',
+        type: 'scatter',
+        fill: 'tonexty',
+        line: { color: '#90ee90' }
+      };
+      const stableLayout = {
+        showlegend: true,
+        height: 200,
+        margin: { t: 10, b: 30, l: 40, r: 10 }
+      };
+      Plotly.newPlot('stable-nodes-chart', [stableTraceFail, stableTraceOk], stableLayout);
+      {% endif %}
+
+      const dynamicTraceFail = {
+        x: {{ info["stats_dates"]|tojson }},
+        y: {{ info["stats_dynamic_fail"]|tojson }},
+        name: 'Failed',
+        type: 'scatter',
+        fill: 'tonexty',
+        line: { color: '#ff7f7f' }
+      };
+      const dynamicTraceOk = {
+        x: {{ info["stats_dates"]|tojson }},
+        y: {{ info["stats_dynamic_ok"]|tojson }},
+        name: 'Success',
+        type: 'scatter',
+        fill: 'tonexty',
+        line: { color: '#90ee90' }
+      };
+      const dynamicLayout = {
+        showlegend: true,
+        height: 200,
+        margin: { t: 10, b: 30, l: 40, r: 10 }
+      };
+      Plotly.newPlot('dynamic-nodes-chart', [dynamicTraceFail, dynamicTraceOk], dynamicLayout);
+    }
+
+    document.addEventListener('DOMContentLoaded', createConnectionCharts);
+
+    // Handle collapsible section icon rotation
+    document.querySelectorAll('.section-header').forEach((header) => {
+      header.addEventListener('click', () => {
+        const icon = header.querySelector('.collapse-icon');
+        if (header.classList.contains('collapsed')) {
+          icon.style.transform = 'rotate(0deg)';
+        } else {
+          icon.style.transform = 'rotate(-90deg)';
+        }
+      });
+    });
+  </script>
+</body>
+</html>

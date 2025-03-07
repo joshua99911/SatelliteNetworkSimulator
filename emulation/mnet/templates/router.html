@@ -1,0 +1,73 @@
+<html>
+  <head>
+    <meta http-equiv="refresh" content="10">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+  </head>
+  <body>
+    <div class="col-lg-8 mx-auto p-4 py-md-5">
+      <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+          <li class="breadcrumb-item"><a href="{{ url_for('root') }}">Home</a></li>
+          <li class="breadcrumb-item active" aria-current="page">Router</li>
+        </ol>
+      </nav>
+      <header class="d-flex align-items-center mb-5 border-bottom">
+        <span class="fs-4"> SatNetMiniSim</span>
+      </header>
+  
+      <h1>Router {{ router["name"] }}</h1>
+
+      {# Add a new section for lat/lon/alt, but only if it's a satellite #}
+      {% if router["lat"] is not none and router["lon"] is not none and router["height"] is not none %}
+        <h2>Position</h2>
+        <p>
+          Latitude: {{ router["lat"]|round(4) }}<br>
+          Longitude: {{ router["lon"]|round(4) }}<br>
+          Altitude: {{ router["height"]|round(2) }} km
+        </p>
+      {% endif %}
+  
+      <h2>Interfaces</h2>
+      <ul>
+        {% if router.get("ip") %}
+          <li>loopback: {{ router["ip"] }}
+        {% endif %}
+        {% for neighbor in router["neighbors"] %}
+          <li>
+            <a href="{{ url_for('view_router', node=neighbor) }}">
+              {{ neighbor }}
+            </a> :
+            {{ router["neighbors"][neighbor]["ip_local"] }}
+            ({{ router["neighbors"][neighbor]["intf_local"] }}) -
+            {{ router["neighbors"][neighbor]["ip_remote"] }}
+            ({{ router["neighbors"][neighbor]["intf_remote"] }})
+            [ {{ router["neighbors"][neighbor]["up"][0] }},
+              {{ router["neighbors"][neighbor]["up"][1] }} ]
+        {% endfor %}
+      </ul>
+
+      <h2>Connectivity</h2>
+      <table>
+        <tbody>
+          {% for ring in ring_list %}
+            <tr>
+              {% for node in ring %}
+                {%- set bg="lightgrey" %}
+                {% if node == router["name"] %}
+                  {%- set bg="white" %}
+                {% elif status_list[node] == 1 %}
+                  {%- set bg="lightgreen" %}
+                {% elif status_list[node] == 0 %}
+                  {%- set bg="pink" %}
+                {% endif %}
+                <td style="background-color:{{bg}};">
+                  {{ node }}
+                </td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </body>
+</html>
