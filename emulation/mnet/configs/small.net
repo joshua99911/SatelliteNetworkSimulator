@@ -1,7 +1,7 @@
 [network]
 #Test
-rings=5
-routers=14
+rings=2
+routers=5
 #Actual
 #rings=5
 #routers=14

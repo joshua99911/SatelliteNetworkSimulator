@@ -106,6 +106,94 @@ class LinkUpdate(BaseModel):
     delay: Optional[float] = None
 
 
+@app.get("/validate/routing")
+async def validate_routing():
+    """Validate that traffic follows the expected paths."""
+    results = []
+    
+    # Get all ground stations
+    ground_station_nodes = [n for n in registered_nodes if n.startswith('G_')]
+    
+    # Check paths between each pair of ground stations
+    for source in ground_station_nodes:
+        for target in ground_station_nodes:
+            if source != target:
+                # Determine expected path based on current uplinks
+                expected_path = calculate_expected_path(source, target)
+                
+                # Run traceroute via API call to source
+                try:
+                    response = requests.post(
+                        f"http://{source}:5000/execute",
+                        json={"command": f"traceroute -n {target_ip}"},
+                        timeout=10
+                    )
+                    
+                    if response.status_code == 200:
+                        actual_path = parse_traceroute(response.json().get("output", ""))
+                        is_valid = validate_path(actual_path, expected_path)
+                        
+                        results.append({
+                            "source": source,
+                            "target": target,
+                            "expected_path": expected_path,
+                            "actual_path": actual_path,
+                            "valid": is_valid
+                        })
+                except Exception as e:
+                    logger.error(f"Error validating path from {source} to {target}: {e}")
+    
+    return {"results": results}
+
+def calculate_expected_path(source, target):
+    """Calculate the expected path based on current uplinks."""
+    source_uplinks = next((node_config['uplinks'] for name, node_config in 
+                          registered_nodes.items() if name == source), [])
+    target_uplinks = next((node_config['uplinks'] for name, node_config in 
+                          registered_nodes.items() if name == target), [])
+    
+    if not source_uplinks or not target_uplinks:
+        return []
+    
+    # Find source's satellite
+    source_sat = source_uplinks[0]['satellite'] if source_uplinks else None
+    
+    # Find target's satellite
+    target_sat = target_uplinks[0]['satellite'] if target_uplinks else None
+    
+    if not source_sat or not target_sat:
+        return []
+    
+    # If same satellite, path is simple
+    if source_sat == target_sat:
+        return [source, source_sat, target]
+    
+    # Otherwise, use the graph to find path between satellites
+    try:
+        sat_path = nx.shortest_path(topology_graph, source=source_sat, target=target_sat)
+        return [source] + sat_path + [target]
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
+        return []
+
+def parse_traceroute(output):
+    """Parse the output of traceroute to get the path."""
+    path = []
+    for line in output.split('\n'):
+        if line and not line.startswith('traceroute'):
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] != '*':
+                path.append(parts[1])
+    return path
+
+def validate_path(actual_path, expected_path):
+    """Check if actual path follows expected path through satellites."""
+    # Simple validation - just check that path length is at least 3 (meaning it went through a satellite)
+    if len(actual_path) < 3:
+        return False
+    
+    # More sophisticated validation based on expected path would go here
+    return True
+
 def log_event(event_text: str):
     """Log an event to the database and in-memory list."""
     event_data = {

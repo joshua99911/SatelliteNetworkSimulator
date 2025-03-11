@@ -3,6 +3,21 @@ Node Agent - Runs on each satellite, ground station, or vessel container
 Responds to configuration requests and reports status to the controller
 '''
 
+try:
+    import os
+    import sys
+    print(f"Python version: {sys.version}")
+    print(f"PYTHONPATH: {os.environ.get('PYTHONPATH', 'not set')}")
+    print(f"Current working directory: {os.getcwd()}")
+    print(f"Directory contents: {os.listdir('.')}")
+    print(f"Emulation directory: {os.listdir('/app/emulation')}")
+    
+    # Rest of imports...
+except Exception as e:
+    with open('/app/logs/startup-error.log', 'w') as f:
+        f.write(f"Error during startup: {str(e)}\n")
+    sys.exit(1)
+
 import os
 import time
 import json
@@ -55,6 +70,42 @@ node_config = {
 }
 
 
+def enforce_network_isolation():
+    """Set up iptables rules to enforce satellite-only routing"""
+    if NODE_TYPE not in ['ground_station', 'vessel']:
+        return True
+        
+    try:
+        # Clear any existing rules first to avoid duplication
+        subprocess.run(['iptables', '-F', 'FORWARD'], check=False)
+        
+        # Block direct communication between ground stations
+        subprocess.run([
+            'iptables', '-A', 'FORWARD', '-d', '172.20.0.0/16', '-j', 'DROP'
+        ], check=False)
+        # Block direct communication with vessels
+        subprocess.run([
+            'iptables', '-A', 'FORWARD', '-d', '172.21.0.0/16', '-j', 'DROP'
+        ], check=False)
+        
+        # Allow traffic to satellite network
+        subprocess.run([
+            'iptables', '-A', 'FORWARD', '-d', '172.19.0.0/16', '-j', 'ACCEPT'
+        ], check=False)
+        
+        # Allow traffic to own uplinks
+        for uplink in node_config['uplinks']:
+            satellite_ip = uplink['remote_ip']
+            subprocess.run([
+                'iptables', '-A', 'FORWARD', '-d', satellite_ip, '-j', 'ACCEPT'
+            ], check=False)
+        
+        logger.info(f"Network isolation rules applied for {NODE_NAME}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to set network isolation: {e}")
+        return False
+
 def update_frr_config(config_files: Dict[str, str]) -> bool:
     """Update FRR configuration files."""
     try:
@@ -95,6 +146,8 @@ def configure_interface(name: str, ip_address: str, netmask: str) -> bool:
 
 def monitor_links():
     """Periodically monitor link status and report metrics."""
+    # Apply network isolation at startup
+    enforce_network_isolation()
     while node_config['running']:
         for neighbor, link_info in node_config['links'].items():
             # Ping the neighbor to check link status
@@ -127,13 +180,26 @@ def monitor_links():
         # Check FRR status
         for service in ['zebra', 'ospfd', 'staticd']:
             try:
-                result = subprocess.run(
-                    ['systemctl', 'is-active', f'frr@{service}'],
-                    stdout=subprocess.PIPE,
-                    text=True
-                )
-                frr_status.labels(service=service).set(1 if result.stdout.strip() == 'active' else 0)
-            except Exception:
+                # Check if process is running by looking for PID files
+                pid_file = f"/var/run/frr/{service}.pid"
+                if os.path.exists(pid_file):
+                    with open(pid_file, 'r') as f:
+                        pid = f.read().strip()
+                        # Check if process with this PID exists
+                        try:
+                            os.kill(int(pid), 0)  # Signal 0 doesn't kill but checks if process exists
+                            frr_status.labels(service=service).set(1)
+                        except (OSError, ProcessLookupError):
+                            frr_status.labels(service=service).set(0)
+                else:
+                    # Alternative: Check with pgrep
+                    try:
+                        subprocess.run(['pgrep', service], check=True, stdout=subprocess.PIPE)
+                        frr_status.labels(service=service).set(1)
+                    except subprocess.CalledProcessError:
+                        frr_status.labels(service=service).set(0)
+            except Exception as e:
+                logger.error(f"Error checking FRR service {service}: {e}")
                 frr_status.labels(service=service).set(0)
                 
         # Report status to controller
@@ -148,12 +214,6 @@ def monitor_links():
         time.sleep(10)  # Wait 10 seconds before checking again
 
 
-@app.route('/status', methods=['GET'])
-def get_status():
-    """Return the current node status."""
-    return jsonify(node_config)
-
-
 @app.route('/config/interface', methods=['POST'])
 def configure_interface_endpoint():
     """Configure a network interface."""
@@ -164,6 +224,12 @@ def configure_interface_endpoint():
         data['netmask']
     )
     return jsonify({'success': success})
+
+
+@app.route('/status', methods=['GET'])
+def get_status():
+    """Return the current node status."""
+    return jsonify(node_config)
 
 
 @app.route('/config/frr', methods=['POST'])
@@ -231,6 +297,8 @@ def configure_uplink_endpoint():
     
     # Add the new uplink
     node_config['uplinks'].append(uplink)
+
+    enforce_network_isolation()
     
     # Set as default route if specified
     if uplink['default']:
@@ -275,6 +343,50 @@ def update_position_endpoint():
         
     return jsonify({'success': True})
 
+
+@app.route('/execute', methods=['POST'])
+def execute_command():
+    """Execute a network diagnostic command and return results."""
+    allowed_commands = {
+        'traceroute': ['/usr/bin/traceroute'],
+        'ping': ['/bin/ping', '-c', '4'],
+        'ip': ['/sbin/ip', 'route'],
+    }
+    
+    data = request.json
+    command = data.get('command', '')
+    
+    if not command:
+        return jsonify({'error': 'No command specified'}), 400
+    
+    # Extract the base command and parameters
+    parts = command.split()
+    base_cmd = parts[0]
+    
+    if base_cmd not in allowed_commands:
+        return jsonify({'error': f'Command {base_cmd} not allowed'}), 403
+    
+    # Build the command with allowed prefix and user parameters
+    cmd = allowed_commands[base_cmd] + parts[1:]
+    
+    try:
+        # Execute the command
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30
+        )
+        
+        return jsonify({
+            'success': result.returncode == 0,
+            'output': result.stdout,
+            'error': result.stderr,
+            'return_code': result.returncode
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/shutdown', methods=['POST'])
 def shutdown_endpoint():

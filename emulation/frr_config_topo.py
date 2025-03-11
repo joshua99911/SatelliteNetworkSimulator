@@ -94,24 +94,36 @@ router ospf
  ospf router-id {ip}
  redistribute static
 {networks}
+{route_filtering}
 exit
 !
 """
 
-OSPF_NW_TEMPLATE = """ network {network} area 0.0.0.0"""
+OSPF_NW_TEMPLATE = """ network {network} area {area}"""
 
+def get_ospf_area(name):
+    if name.startswith('G_') or name.startswith('V_'):
+        # Each ground station and vessel gets its own area
+        # This prevents direct routes between ground stations
+        node_id = hash(name) % 254 + 1  # Avoid area 0
+        return f"0.0.0.{node_id}"
+    else:
+        # All satellites in backbone area
+        return "0.0.0.0"
 
+# Update the create_ospf_config function
 def create_ospf_config(graph: networkx.Graph, name: str) -> str:
     node = graph.nodes[name]
     ip = node.get("ip")  # May be None
     networks = []
     networks_str = []
+    route_filtering = ""
 
     if ip is not None:
         # Make loopback a /32
-        # TODO: since this is a IPv4Interface, maybe don't change? Try that
         network = ipaddress.IPv4Network((ip.ip, 32))
-        networks_str.append(OSPF_NW_TEMPLATE.format(network=format(network)))
+        area = get_ospf_area(name)
+        networks_str.append(OSPF_NW_TEMPLATE.format(network=format(network), area=area))
 
     for neighbor in graph.adj[name]:
         edge = graph.adj[name][neighbor]
@@ -121,11 +133,23 @@ def create_ospf_config(graph: networkx.Graph, name: str) -> str:
             ip = edge["ip"][name]
 
     for network in networks:
-        networks_str.append(OSPF_NW_TEMPLATE.format(network=format(network)))
+        area = get_ospf_area(name)
+        networks_str.append(OSPF_NW_TEMPLATE.format(network=format(network), area=area))
 
+    # Add route filtering for ground stations and vessels
+    if name.startswith('G_') or name.startswith('V_'):
+        # Block direct communication with other ground stations/vessels
+        route_filtering = " area 0.0.0.0 virtual-link 0.0.0.1\n"
+        route_filtering += " distribute-list SATELLITE_ONLY out\n"
+        route_filtering += "!\n"
+        route_filtering += "ip prefix-list SATELLITE_ONLY permit 10.1.0.0/16 le 32\n"
+    
     # Router ID must be a plain IP, no subnet.
     return OSPF_TEMPLATE.format(
-        name=name, ip=format(ip.ip), networks="\n".join(networks_str)
+        name=name, 
+        ip=format(ip.ip), 
+        networks="\n".join(networks_str),
+        route_filtering=route_filtering
     )
 
 

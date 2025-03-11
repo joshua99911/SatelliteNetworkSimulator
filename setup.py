@@ -213,22 +213,25 @@ logfile=/app/logs/supervisord.log
 pidfile=/app/supervisord.pid
 
 [program:frr]
-command=/usr/lib/frr/frrinit.sh start
+command=/bin/bash -c "mkdir -p /var/run/frr && chown -R frr:frr /var/run/frr /etc/frr && /usr/lib/frr/frrinit.sh start"
 autostart=true
 autorestart=true
 startsecs=3
-startretries=3
+startretries=5
 stdout_logfile=/app/logs/frr.log
 stderr_logfile=/app/logs/frr-error.log
+priority=10
 
 [program:node_agent]
 command=python3 -m emulation.node_agent
 autostart=true
 autorestart=true
 startsecs=5
-startretries=3
+startretries=5
 stdout_logfile=/app/logs/node_agent.log
 stderr_logfile=/app/logs/node_agent-error.log
+priority=20
+depends_on=frr
 ''')
     
     print(f"Created supervisord.conf: {DOCKER_DIR / 'supervisord.conf'}")
@@ -260,9 +263,27 @@ def create_docker_compose():
     
     # Create the docker-compose.yml file
     with open(PROJECT_ROOT / 'docker-compose.yml', 'w') as f:
+        # Write the common services (mongodb, controller, dynamics)
         f.write('''version: '3.8'
 
 services:
+  # MongoDB for data storage - needs to start first
+  mongodb:
+    image: mongo:4.4
+    container_name: mongodb
+    networks:
+      - control_network
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    healthcheck:
+      test: ["CMD", "mongo", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
   # Controller service
   controller:
     build:
@@ -280,8 +301,16 @@ services:
       - control_network
     environment:
       - CONFIG_FILE=/app/emulation/mnet/configs/small.net
+      - MONGODB_URI=mongodb://mongodb:27017/
     depends_on:
-      - mongodb
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # Dynamics simulator service
   dynamics:
@@ -298,28 +327,21 @@ services:
       - control_network
     environment:
       - CONFIG_FILE=/app/emulation/mnet/configs/small.net
+      - CONTROLLER_URL=http://controller:8000
     depends_on:
-      - controller
-      
-  # MongoDB for data storage
-  mongodb:
-    image: mongo:latest
-    container_name: mongodb
-    networks:
-      - control_network
-    volumes:
-      - mongo_data:/data/db
-    ports:
-      - "27017:27017"
+      controller:
+        condition: service_healthy
 ''')
         
-        # Add satellite nodes (names converted to lowercase)
+        # Add satellite nodes with proper network configuration
         f.write("  # Satellite nodes\n")
         for ring in range(num_rings):
             for node in range(num_routers):
                 # Build the name and then convert to lowercase
                 name = f"R{ring}_{node}"
                 service_name = name.lower()
+                
+                # Create satellite configuration
                 f.write(f'''  {service_name}:
     build:
       context: .
@@ -329,25 +351,33 @@ services:
       - NET_ADMIN
       - SYS_ADMIN
     volumes:
+      - ./emulation:/app/emulation
       - ./logs/{service_name}:/app/logs
       - ./data/{service_name}:/app/data
+      - /etc/frr/{service_name}:/etc/frr:rw
+    working_dir: /app
     networks:
       - control_network
       - satellite_network
     environment:
-      - NODE_NAME={service_name}
+      - NODE_NAME={name}
       - NODE_TYPE=satellite
       - CONTROLLER_URL=http://controller:8000
+      - PYTHONPATH=/app
     depends_on:
-      - controller
+      controller:
+        condition: service_healthy
 
 ''')
         
-        # Add ground stations (names converted to lowercase)
+        # Add ground stations with isolated networks
         if ground_stations:
             f.write("  # Ground stations\n")
-            for name in ground_stations:
+            for i, name in enumerate(ground_stations):
                 service_name = name.lower()
+                
+                # For each ground station, only include networks it should connect to
+                # This is a simplified method - dynamics service will control the actual connections
                 f.write(f'''  {service_name}:
     build:
       context: .
@@ -357,24 +387,29 @@ services:
       - NET_ADMIN
       - SYS_ADMIN
     volumes:
+      - ./emulation:/app/emulation
       - ./logs/{service_name}:/app/logs
       - ./data/{service_name}:/app/data
+      - /etc/frr/{service_name}:/etc/frr:rw
+    working_dir: /app
     networks:
       - control_network
-      - ground_network
+      - satellite_network
     environment:
-      - NODE_NAME={service_name}
-      - NODE_TYPE=ground_station
+      - NODE_NAME={name}
+      - NODE_TYPE=satellite
       - CONTROLLER_URL=http://controller:8000
+      - PYTHONPATH=/app
     depends_on:
-      - controller
+      controller:
+        condition: service_healthy
 
 ''')
         
-        # Add vessels (names converted to lowercase)
+        # Add vessels with isolated networks
         if vessels:
             f.write("  # Vessels\n")
-            for name in vessels:
+            for i, name in enumerate(vessels):
                 service_name = name.lower()
                 f.write(f'''  {service_name}:
     build:
@@ -385,38 +420,72 @@ services:
       - NET_ADMIN
       - SYS_ADMIN
     volumes:
+      - ./emulation:/app/emulation
       - ./logs/{service_name}:/app/logs
       - ./data/{service_name}:/app/data
+      - /etc/frr/{service_name}:/etc/frr:rw
+    working_dir: /app
     networks:
       - control_network
-      - vessel_network
+      - satellite_network
     environment:
-      - NODE_NAME={service_name}
-      - NODE_TYPE=vessel
+      - NODE_NAME={name}
+      - NODE_TYPE=satellite
       - CONTROLLER_URL=http://controller:8000
+      - PYTHONPATH=/app
     depends_on:
-      - controller
+      controller:
+        condition: service_healthy
 
 ''')
         
-        # Add networks and volumes
+        # Add networks with non-overlapping subnets
         f.write('''networks:
   # Control network for management traffic
   control_network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
     
   # Satellite network for inter-satellite links
   satellite_network:
     driver: bridge
-    
-  # Ground network for ground station connections
-  ground_network:
-    driver: bridge
-    
-  # Vessel network for vessel connections
-  vessel_network:
-    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+''')
 
+        # Add individual uplink networks for each ground station with non-overlapping subnets
+        for i, name in enumerate(ground_stations):
+            service_name = name.lower()
+            # Using the 172.20.X.0/24 range for ground stations (starting at 172.20.1.0/24)
+            subnet = f"172.20.{i+1}.0/24"
+            f.write(f'''
+  # Uplink network for {service_name}
+  {service_name}_uplink:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: {subnet}
+''')
+        
+        # Add individual uplink networks for each vessel with non-overlapping subnets
+        for i, name in enumerate(vessels):
+            service_name = name.lower()
+            # Using the 172.21.X.0/24 range for vessels (starting at 172.21.1.0/24)
+            subnet = f"172.21.{i+1}.0/24"
+            f.write(f'''
+  # Uplink network for {service_name}
+  {service_name}_uplink:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: {subnet}
+''')
+        
+        # Add volumes
+        f.write('''
 volumes:
   mongo_data:
 ''')
